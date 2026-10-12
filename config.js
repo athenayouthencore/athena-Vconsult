@@ -16,7 +16,7 @@ window.ATHENA_CONFIG = {
      It supplies: the video library & backdrop playlist (from the Sheet),
      consult details for each link, free TURN relay credentials, and logs.
      If left blank, the page uses the LOCAL lists below.              */
-  apiUrl: '',
+  apiUrl: 'https://script.google.com/macros/s/AKfycbwzlRJRwmisFzpXJvLaFKfbNX_3-81inVIaBDDJNmuUXvT9E9BPGivWEEUsANeWN_Vt/exec',
 
   /* ---- Studio background image for the doctor's camera (optional) --
      Must be a file inside this website (e.g. 'assets/studio.jpg'),
