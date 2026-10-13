@@ -336,7 +336,7 @@ body.panel-open #transport{left:calc((100% - 388px)/2)}
   #scr-welcome,#scr-end,#scr-browser{padding:0;align-items:flex-end}
   #scr-welcome > .panel-card,#scr-end > .panel-card,#scr-browser > .panel-card{
     width:100%;margin:auto 0 0;border-radius:30px 30px 0 0;border-left:0;border-right:0;border-bottom:0;
-    padding:88px 22px calc(20px + var(--safe-b));
+    padding:30px 22px calc(20px + var(--safe-b));
     background:linear-gradient(180deg,rgba(30,21,36,.78),rgba(22,15,27,.94) 38%);
     box-shadow:0 -24px 60px rgba(8,4,10,.55);
     animation:sheetUp .9s cubic-bezier(.16,1,.3,1) both}
@@ -421,6 +421,9 @@ body.role-p.has-room #scr-welcome > .panel-card::before{background:rgba(184,151,
   body.role-p.has-room #scr-welcome > .panel-card{width:min(470px,42vw);padding:40px 32px 34px}
   body.role-p.has-room #scr-welcome h1.title{font-size:36px}
 }
+/* No decorative arch tiles on the cards — text and buttons only */
+#scr-welcome .arch,#scr-end .arch,#scr-browser .arch,#waitCard .arch{display:none!important}
+#scr-welcome h1.title,#scr-end h1.title,#scr-browser h1.title,#waitCard h1.title{margin-top:4px}
 #flash{position:fixed;left:50%;top:calc(var(--top) + 6px);z-index:80;transform:translate(-50%,-140%);display:flex;align-items:center;gap:12px;padding:12px 20px 12px 14px;border-radius:999px;background:var(--velvet);border:1px solid var(--gold);box-shadow:0 18px 50px rgba(0,0,0,.55);font-size:15.5px;max-width:calc(100% - 28px);transition:transform .45s cubic-bezier(.2,.8,.2,1),opacity .3s,visibility 0s .45s;opacity:0;visibility:hidden}
 #flash.show{transform:translate(-50%,0);opacity:1;visibility:visible;transition:transform .45s cubic-bezier(.2,.8,.2,1),opacity .3s}
 #flash .fi{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;background:#8FD19E;color:#173B22}
@@ -910,7 +913,7 @@ $('#btnJoinAudio').onclick = () => join('audio');
 
 async function getMedia(mode){
   const video = IS_HOST
-    ? { width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:24, max:30 }, facingMode:'user' }
+    ? { width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30, max:30 }, facingMode:'user' }
     : { width:{ ideal:640 }, height:{ ideal:480 }, frameRate:{ ideal:24, max:30 }, facingMode:'user' };
   const audio = { echoCancellation:true, noiseSuppression:true, autoGainControl:true };
   if (mode === 'full'){
@@ -1234,6 +1237,7 @@ function wireCall(r, call){
       pc.addEventListener('connectionstatechange', () => { if (P.call === call && pc.connectionState === 'failed') peerDown(r); });
     }
     if (S.sendVideo !== S.rawVideo) replaceVideoTrack(S.sendVideo);
+    tuneSenders(call.peerConnection);
   });
   call.on('close', () => { if (P.call === call) peerDown(r); });
   call.on('error', () => { if (P.call === call) peerDown(r); });
@@ -1570,7 +1574,7 @@ const Studio = {
       [this.mA, this.mB].forEach(c => { c.width = mw; c.height = mh; });
       this.mAx = this.mA.getContext('2d'); this.mBx = this.mB.getContext('2d'); this.mFirst = true;
     }
-    const a = 0.55, prev = this.mA, next = this.mB, nx = this.mBx;
+    const a = 0.72, prev = this.mA, next = this.mB, nx = this.mBx;
     nx.globalCompositeOperation = 'source-over'; nx.globalAlpha = 1; nx.filter = 'none';
     nx.clearRect(0, 0, mw, mh);
     if (this.mFirst){ nx.drawImage(mask, 0, 0, mw, mh); this.mFirst = false; }
@@ -1587,7 +1591,10 @@ const Studio = {
     const g = this.ctx, w = this.canvas.width, h = this.canvas.height;
     const m = this.smoothMask(r.segmentationMask, w, h);
     g.save(); g.clearRect(0, 0, w, h);
-    g.filter = 'blur(' + Math.max(3, Math.round(w / 320)) + 'px)'; g.drawImage(m, 0, 0, w, h); g.filter = 'none';
+    g.filter = 'blur(2px)'; g.drawImage(m, 0, 0, w, h); g.filter = 'none';
+    // tighten the edge: a second pass of the mask through itself trims the soft halo around shoulders and hair
+    g.globalCompositeOperation = 'destination-in'; g.filter = 'blur(1px)'; g.drawImage(m, 0, 0, w, h); g.filter = 'none';
+    g.globalCompositeOperation = 'source-over';
     g.globalCompositeOperation = 'source-in'; g.drawImage(r.image, 0, 0, w, h);
     g.globalCompositeOperation = 'destination-over';
     if (this.mode === 'blur'){ g.filter = 'blur(16px)'; g.drawImage(r.image, 0, 0, w, h); g.filter = 'none'; }
@@ -1603,7 +1610,8 @@ const Studio = {
     toast('Preparing studio background…');
     try { await this.load(); } catch(e){ toast('Studio background could not load on this network'); return; }
     const settings = S.rawVideo.getSettings ? S.rawVideo.getSettings() : {};
-    const w = settings.width || 1280, h = settings.height || 720;
+    let w = settings.width || 1280, h = settings.height || 720;
+    if (w > 960){ h = Math.round(h * 960 / w); w = 960; }   // 960 wide is sharp on the patient's screen and much lighter to process
     if (!this.canvas){
       this.canvas = document.createElement('canvas'); this.ctx = this.canvas.getContext('2d');
       this.src = document.createElement('video'); this.src.muted = true; this.src.playsInline = true;
@@ -1614,17 +1622,22 @@ const Studio = {
     this.mode = mode; this.mFirst = true;
     document.body.classList.toggle('studio-on', mode === 'studio' || mode === 'video');
     if (mode === 'video') this.startFilm(); else this.stopFilm();
-    if (!this.outTrack || this.outTrack.readyState === 'ended'){ this.outTrack = this.canvas.captureStream(24).getVideoTracks()[0]; }
+    if (!this.outTrack || this.outTrack.readyState === 'ended'){ this.outTrack = this.canvas.captureStream(30).getVideoTracks()[0]; }
     this.outTrack.enabled = S.camOn;
     this.run();
     useVideoTrack(this.outTrack);
   },
   run(){
     clearTimeout(this.loop);
+    const token = (this.runToken = (this.runToken || 0) + 1);
+    const v = this.src;
+    const hasRVFC = v && 'requestVideoFrameCallback' in v;
     const step = async () => {
-      if (this.mode === 'off') return;
-      if (!this.busy && this.src.readyState >= 2){ this.busy = true; try { await this.seg.send({ image:this.src }); } catch(e){} this.busy = false; }
-      this.loop = setTimeout(step, 15);   // run as fast as the model allows (about 25–30 fps on a laptop)
+      if (this.mode === 'off' || token !== this.runToken) return;
+      if (!this.busy && v.readyState >= 2){ this.busy = true; try { await this.seg.send({ image:v }); } catch(e){} this.busy = false; }
+      // next camera frame (smooth, no wasted work); timer fallback for browsers without frame callbacks
+      if (hasRVFC && document.visibilityState === 'visible') v.requestVideoFrameCallback(step);
+      else this.loop = setTimeout(step, 33);
     };
     step();
   },
@@ -1650,7 +1663,23 @@ function useVideoTrack(track, quiet){
 function replaceVideoTrack(track){
   OTHERS.forEach(r => {
     const call = S.peers[r].call; const pc = call && call.peerConnection; if (!pc) return;
-    pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'video' && s.track !== track) s.replaceTrack(track).catch(() => {}); });
+    pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'video' && s.track !== track) s.replaceTrack(track).then(() => tuneSenders(pc)).catch(() => {}); });
+  });
+}
+/* Ask the browser for a steady, sharp picture instead of letting it guess.
+   Doctor/counsellor send up to 2 Mbps, patient up to 1 Mbps; keep frame rate smooth when the network dips. */
+function tuneSenders(pc){
+  if (!pc || !pc.getSenders) return;
+  pc.getSenders().forEach(sender => {
+    if (!sender.track || sender.track.kind !== 'video' || !sender.getParameters) return;
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxBitrate = IS_HOST ? 2000000 : 1000000;
+      p.encodings[0].maxFramerate = 30;
+      p.degradationPreference = 'balanced';
+      sender.setParameters(p).catch(() => {});
+    } catch(e){}
   });
 }
 
