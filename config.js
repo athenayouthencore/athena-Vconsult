@@ -18,6 +18,17 @@ window.ATHENA_CONFIG = {
      If left blank, the page uses the LOCAL lists below.              */
   apiUrl: 'https://script.google.com/macros/s/AKfycbwzlRJRwmisFzpXJvLaFKfbNX_3-81inVIaBDDJNmuUXvT9E9BPGivWEEUsANeWN_Vt/exec',
 
+  /* ---- Premium room photo -------------------------------------------
+     Shown full-screen the moment the patient opens the link.
+     Upload the photo into an "assets" folder in this GitHub repository.
+     roomImage:        wide photo for laptops   (1920 x 1080, JPG, under 600 KB)
+     roomImageMobile:  tall photo for phones    (1080 x 1920, JPG, under 500 KB) — optional
+     roomFilmsInCall:  true  = once the call opens, the Backdrop Playlist films take over
+                       false = keep the room photo behind the call too                     */
+  roomImage:       'assets/room.jpg',
+  roomImageMobile: 'assets/room-mobile.jpg',
+  roomFilmsInCall: true,
+
   /* ---- Studio background image for the doctor's camera (optional) --
      Must be a file inside this website (e.g. 'assets/studio.jpg'),
      NOT a link to another site, otherwise the browser blocks it.      */
