@@ -241,6 +241,27 @@ body.panel-open #transport{left:calc((100% - 388px)/2)}
 /* Modal + toast */
 #modal{position:fixed;inset:0;z-index:60;background:rgba(10,6,12,.6);display:flex;align-items:center;justify-content:center;padding:20px}
 #modal .panel-card{animation:rise .3s ease both}
+/* Live presence line + join/leave flash */
+.presence{display:flex;align-items:center;justify-content:center;gap:10px;margin:16px auto 0;padding:10px 14px;border-radius:14px;font-size:14.5px;line-height:1.4;max-width:34ch;text-align:left;background:rgba(243,236,226,.05);border:1px solid rgba(243,236,226,.1);color:var(--mist)}
+.presence .pd{width:10px;height:10px;border-radius:50%;flex:none;background:#6E6070}
+.presence.here{color:var(--ivory);background:rgba(143,209,158,.1);border-color:rgba(143,209,158,.35)}
+.presence.here .pd{background:#8FD19E;box-shadow:0 0 0 0 rgba(143,209,158,.6);animation:ping 1.6s ease-out infinite}
+.presence.soon{color:var(--ivory);background:rgba(217,188,140,.1);border-color:rgba(217,188,140,.35)}
+.presence.soon .pd{background:var(--gold)}
+.presence-list{display:grid;gap:8px;margin-top:16px}
+#wPresence .presence{font-size:15.5px;padding:12px 16px}
+#wPresence .presence.here{font-weight:500;animation:glow 1.6s ease-in-out infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(143,209,158,0)}50%{box-shadow:0 0 0 4px rgba(143,209,158,.22),0 0 24px rgba(143,209,158,.25)}}
+.presence-list .presence{margin:0 auto}
+@keyframes ping{0%{box-shadow:0 0 0 0 rgba(143,209,158,.6)}80%,100%{box-shadow:0 0 0 10px rgba(143,209,158,0)}}
+#flash{position:fixed;left:50%;top:calc(var(--top) + 6px);z-index:80;transform:translate(-50%,-140%);display:flex;align-items:center;gap:12px;padding:12px 20px 12px 14px;border-radius:999px;background:var(--velvet);border:1px solid var(--gold);box-shadow:0 18px 50px rgba(0,0,0,.55);font-size:15.5px;max-width:calc(100% - 28px);transition:transform .45s cubic-bezier(.2,.8,.2,1)}
+#flash.show{transform:translate(-50%,0)}
+#flash .fi{width:30px;height:30px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;background:#8FD19E;color:#173B22}
+#flash.warn{border-color:#E7A27C}#flash.warn .fi{background:#E7A27C;color:#3A1A0E}
+#flash.info .fi{background:var(--gold);color:var(--plum)}
+#flash .fi svg{width:16px;height:16px}
+#flash b{font-weight:500}
+@media (prefers-reduced-motion:reduce){.presence.here .pd,#wPresence .presence.here{animation:none}#flash{transition:none}}
 #toast{position:fixed;left:50%;top:calc(var(--top) + 8px);transform:translateX(-50%) translateY(-10px);z-index:70;padding:10px 16px;border-radius:12px;background:var(--velvet);border:1px solid var(--line);font-size:14px;opacity:0;pointer-events:none;transition:all .3s;max-width:calc(100% - 32px);text-align:center}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 </style>
@@ -272,6 +293,7 @@ body.panel-open #transport{left:calc((100% - 388px)/2)}
       <h1 class="title" id="wTitle">Welcome</h1>
       <p class="lead" id="wLead">Preparing your consultation room.</p>
       <div id="wWhen" class="when hidden"></div>
+      <div id="wPresence" class="presence-list" aria-live="polite"></div>
       <input id="wName" class="field hidden" placeholder="Your name" autocomplete="name">
       <div class="actions">
         <button class="btn-gold" id="btnJoin" disabled>Join consultation</button>
@@ -301,6 +323,7 @@ body.panel-open #transport{left:calc((100% - 388px)/2)}
           <div class="arch breathing" id="waitArch"><div class="arch-mono" id="waitMono">A</div></div>
           <h1 class="title" id="waitTitle">Your doctor will join shortly</h1>
           <p class="lead" id="waitLead">Please stay on this screen. You'll see and hear them as soon as they connect.</p>
+          <div id="waitPresence" class="presence-list" aria-live="polite"></div>
         </div>
       </div>
     </div>
@@ -363,6 +386,7 @@ body.panel-open #transport{left:calc((100% - 388px)/2)}
 
 <div id="modal" class="hidden"></div>
 <div id="toast" role="status"></div>
+<div id="flash" role="status" aria-live="assertive"><span class="fi"></span><span id="flashTxt"></span></div>
 
 <script>
 (() => {
@@ -570,8 +594,90 @@ async function boot(){
   if (I.whenText){ $('#wWhen').textContent = I.whenText; $('#wWhen').classList.remove('hidden'); }
   $('#wArch').innerHTML = '<div class="arch-mono">' + esc(ME === 'p' ? initials(S.names.d) : 'A') + '</div>';
 
+  Presence.start();
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.RTCPeerConnection){ show('#scr-browser'); return; }
   $('#btnJoin').disabled = false;
+}
+
+/* ======================================================================
+   LIVE PRESENCE — who has the link open / is in the room
+   ====================================================================== */
+const Presence = {
+  st:'lobby', people:null, timer:null,
+  start(){ if (!C.apiUrl || !ROOM) return; this.beat(); this.timer = setInterval(() => this.beat(), 12000); },
+  set(st){ this.st = st; this.beat(); },
+  url(st){ return C.apiUrl + (C.apiUrl.indexOf('?') > -1 ? '&' : '?') + new URLSearchParams({ api:'beat', r:ROOM, as:ME, st }).toString(); },
+  beat(){
+    if (S.ended && this.st !== 'gone') return;
+    api({ api:'beat', r:ROOM, as:ME, st:this.st }, 9000).then(j => { if (j && j.ok && j.people) this.update(j.people); }).catch(() => {});
+  },
+  gone(){ clearInterval(this.timer); this.st = 'gone'; try { fetch(this.url('gone'), { keepalive:true, mode:'no-cors' }); } catch(e){} },
+  update(people){
+    const prev = this.people; this.people = people;
+    if (prev){
+      OTHERS.forEach(r => {
+        const a = prev[r] || 'away', b = people[r] || 'away';
+        if (a === b || S.peers[r].media) return;
+        const n = tileLabel(r).name;
+        if (b === 'call' && !S.callStart) flash(r === 'p' ? n + ' has joined the consult room of ' + (S.names.d || 'the doctor') : (r === 'd' ? (S.names.d || 'The doctor') + ' has joined the consult room' : n + ' has joined the consult room'), 'ok');
+        else if (b === 'lobby' && a === 'away') flash(n + ' has opened the link', 'info');
+        else if (b === 'away' && !S.callStart) flash(n + ' closed the link', 'warn');
+      });
+    }
+    paintPresence();
+  }
+};
+function presenceLine(r){
+  const st = (Presence.people && Presence.people[r]) || 'away';
+  const n = tileLabel(r).name;
+  let cls = '', txt;
+  const doc = S.names.d || 'the doctor';
+  if (r === 'p'){
+    txt = st === 'call' ? n + ' has joined the consult room of ' + doc : st === 'lobby' ? n + ' has opened the link and is about to join' : n + ' hasn\u2019t joined yet';
+  } else if (r === 'd'){
+    txt = st === 'call' ? doc + ' has joined the consult room' + (ME === 'p' ? ' and is waiting for you' : '') : st === 'lobby' ? doc + ' is about to join' : doc + ' hasn\u2019t joined yet' + (ME === 'p' ? '. You can join now and wait.' : '');
+  } else {
+    if (st === 'away') return '';
+    txt = (S.names.c ? S.names.c : 'A counsellor') + (st === 'call' ? ' is in the room' : ' is about to join');
+  }
+  cls = st === 'call' ? 'here' : st === 'lobby' ? 'soon' : '';
+  return '<div class="presence ' + cls + '"><span class="pd"></span><span>' + esc(txt) + '</span></div>';
+}
+function paintPresence(){
+  if (!Presence.people) return;
+  const order = ME === 'p' ? ['d','c'] : (ME === 'd' ? ['p','c'] : ['d','p']);
+  $('#wPresence').innerHTML = order.map(presenceLine).join('');
+  $('#waitPresence').innerHTML = order.filter(r => !S.peers[r].media).map(presenceLine).join('');
+  if (IS_HOST && document.visibilityState === 'hidden'){
+    const waiting = order.find(r => Presence.people[r] === 'call' && !S.peers[r].media);
+    document.title = waiting ? '\u25CF ' + tileLabel(waiting).name + ' is waiting' : 'Athena Private Consultation';
+  }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') document.title = 'Athena Private Consultation'; });
+
+let flashT;
+function flash(msg, kind){
+  const f = $('#flash');
+  f.className = kind || 'ok';
+  f.querySelector('.fi').innerHTML = kind === 'warn' ? ICON.x : (kind === 'info' ? ICON.person : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>');
+  $('#flashTxt').textContent = msg;
+  requestAnimationFrame(() => f.classList.add('show'));
+  clearTimeout(flashT); flashT = setTimeout(() => f.classList.remove('show'), 4500);
+  if (kind !== 'warn') chime();
+}
+let audioCtx = null;
+function chime(){
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') return;
+    const t0 = audioCtx.currentTime;
+    [659.25, 987.77].forEach((hz, i) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = hz;
+      g.gain.setValueAtTime(0, t0 + i * .14); g.gain.linearRampToValueAtTime(.08, t0 + i * .14 + .02); g.gain.exponentialRampToValueAtTime(.0001, t0 + i * .14 + .6);
+      o.connect(g).connect(audioCtx.destination); o.start(t0 + i * .14); o.stop(t0 + i * .14 + .65);
+    });
+  } catch(e){}
 }
 
 $('#btnCopyMe').onclick = () => copyText(location.href);
@@ -632,6 +738,8 @@ async function join(mode){
   try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
   document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && !S.ended){ try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){} if (S.peer && S.peer.disconnected && !S.peer.destroyed) S.peer.reconnect(); } });
 
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch(e){}
+  Presence.set('call');
   enterCall();
   await Promise.race([S._iceP, new Promise(r => setTimeout(r, 2500))]);
   startPeer();
@@ -651,6 +759,9 @@ function enterCall(){
   $('#pClose').innerHTML = ICON.x;
   $('#tPlay').innerHTML = ICON.pause;
   paintHear();
+  if (ME === 'd' && S.hasCam && window.innerWidth > 900 && Studio.clips().length){
+    setTimeout(() => { if (!S.ended && Studio.mode === 'off') Studio.set('video'); }, 1200);
+  }
   if (!S.hasCam) $('#cCam').disabled = true;
   ensureTile(ME);
   setTileStream(ME, new MediaStream([S.sendVideo].filter(Boolean)));
@@ -862,9 +973,9 @@ function peerUp(r){
   S.peers[r].everUp = true;
   if (!S.callStart){ S.callStart = now(); $('#timer').classList.remove('hidden'); logEvent('connected', { with:r }); }
   S.joinedOnce = true;
-  if (S.peers[r]._downToast) toast(tileLabel(r).name + ' is back');
+  flash(tileLabel(r).name + (S.peers[r]._downToast ? ' is back in the call' : ' has joined the call'), 'ok');
   S.peers[r]._downToast = false;
-  layout();
+  layout(); paintPresence();
 }
 function peerDown(r){
   const P = S.peers[r];
@@ -873,8 +984,8 @@ function peerDown(r){
   try { P.conn && P.conn.close(); } catch(e){}
   P.call = null; P.conn = null; P.media = false; P.data = false; P.stream = null; P.dialAt = 0;
   const t = document.querySelector('.tile[data-role="' + r + '"]'); if (t){ const v = t.querySelector('video'); v.srcObject = null; t.classList.add('no-media'); }
-  if (was && !S.ended){ P._downToast = true; toast(tileLabel(r).name + ' disconnected. Reconnecting…'); }
-  layout();
+  if (was && !S.ended){ P._downToast = true; flash(tileLabel(r).name + ' left the call. Waiting for them to reconnect\u2026', 'warn'); }
+  layout(); paintPresence();
 }
 function send(r, msg){ const P = S.peers[r]; if (P && P.conn && P.data){ try { P.conn.send(msg); } catch(e){} } }
 function broadcast(msg){ OTHERS.forEach(r => send(r, msg)); }
@@ -1097,6 +1208,47 @@ $('#seek').addEventListener('change', () => { S._seeking = false; hostUpdate({ a
    ====================================================================== */
 const Studio = {
   mode:'off', seg:null, loading:null, canvas:null, ctx:null, src:null, bgCanvas:null, loop:null, outTrack:null, busy:false,
+  film:null, filmList:[], filmIdx:0, filmTimer:null,
+  /* Films that can run behind the doctor: Backdrop Playlist rows with mode "doctor"
+     (or branding films if none are marked). They must be files on this website,
+     e.g. videos/bg-clinic.mp4 — the browser refuses to mix in videos from other sites. */
+  clips(){
+    const same = b => { try { return new URL(b.url, location.href).origin === location.origin; } catch(e){ return false; } };
+    const all = S.backdrops.filter(same);
+    const doc = all.filter(b => b.mode === 'doctor');
+    if (doc.length) return doc;
+    const brand = all.filter(b => b.mode === 'branding');
+    return brand.length ? brand : all;
+  },
+  startFilm(){
+    this.filmList = this.clips(); this.filmIdx = 0;
+    if (!this.filmList.length) return false;
+    if (!this.film){
+      this.film = document.createElement('video');
+      this.film.muted = true; this.film.playsInline = true; this.film.crossOrigin = 'anonymous';
+      this.film.onended = () => this.nextFilm();
+      this.film.onerror = () => setTimeout(() => this.nextFilm(), 500);
+    }
+    this.nextFilm();
+    return true;
+  },
+  nextFilm(){
+    clearTimeout(this.filmTimer);
+    if (this.mode !== 'video' || !this.filmList.length) return;
+    const item = this.filmList[this.filmIdx++ % this.filmList.length];
+    this.film.loop = this.filmList.length === 1;
+    this.film.src = item.url;
+    try { this.film.currentTime = Number(item.start) || 0; } catch(e){}
+    this.film.play().catch(() => {});
+    if (this.filmList.length > 1) this.filmTimer = setTimeout(() => this.nextFilm(), Math.max(5, C.backdropClipSeconds) * 1000);
+  },
+  stopFilm(){ clearTimeout(this.filmTimer); if (this.film){ this.film.pause(); } },
+  drawCover(g, el, w, h){
+    const vw = el.videoWidth, vh = el.videoHeight; if (!vw || !vh) return false;
+    const sc = Math.max(w / vw, h / vh);
+    g.drawImage(el, (w - vw * sc) / 2, (h - vh * sc) / 2, vw * sc, vh * sc);
+    return true;
+  },
   load(){
     if (this.loading) return this.loading;
     this.loading = new Promise((res, rej) => {
@@ -1133,12 +1285,14 @@ const Studio = {
     g.globalCompositeOperation = 'source-in'; g.drawImage(r.image, 0, 0, w, h);
     g.globalCompositeOperation = 'destination-over';
     if (this.mode === 'blur'){ g.filter = 'blur(16px)'; g.drawImage(r.image, 0, 0, w, h); g.filter = 'none'; }
+    else if (this.mode === 'video' && this.film && this.film.readyState >= 2 && this.drawCover(g, this.film, w, h)){ /* running clinic film */ }
     else g.drawImage(this.bgCanvas, 0, 0, w, h);
     g.restore();
   },
   async set(mode){
     if (mode === this.mode) return;
-    if (mode === 'off'){ this.stop(); this.mode = 'off'; useVideoTrack(S.rawVideo); return; }
+    if (mode === 'off'){ this.stop(); this.stopFilm(); this.mode = 'off'; useVideoTrack(S.rawVideo); return; }
+    if (mode === 'video' && !this.clips().length){ toast('Add films to the Backdrop Playlist sheet (mode "doctor") and upload them to the website\u2019s videos folder first.', 6000); return; }
     if (!S.hasCam){ toast('No camera is available'); return; }
     toast('Preparing studio background…');
     try { await this.load(); } catch(e){ toast('Studio background could not load on this network'); return; }
@@ -1152,6 +1306,7 @@ const Studio = {
     this.bgCanvas = this.makeBg(w, h);
     this.src.srcObject = new MediaStream([S.rawVideo]); await this.src.play().catch(() => {});
     this.mode = mode;
+    if (mode === 'video') this.startFilm(); else this.stopFilm();
     if (!this.outTrack || this.outTrack.readyState === 'ended'){ this.outTrack = this.canvas.captureStream(24).getVideoTracks()[0]; }
     this.outTrack.enabled = S.camOn;
     this.run();
@@ -1254,7 +1409,8 @@ function renderLook(body){
   const sopts = [
     ['off','Plain camera','Your real surroundings.', ICON.person],
     ['blur','Soft blur','Blurs everything behind you.', ICON.blur],
-    ['studio','Athena studio','Replaces your background with the Athena studio.', ICON.sparkle]
+    ['studio','Athena studio','Replaces your background with the Athena studio.', ICON.sparkle],
+    ['video','Clinic film behind you','A running Athena film plays behind you. Uses Backdrop Playlist rows with mode \u201cdoctor\u201d.', ICON.film]
   ];
   body.innerHTML = '<h3>Backdrop on every screen</h3><p class="p-note">Plays silently behind the call for everyone, including the patient.</p>'
     + opts.map(o => '<button class="opt" data-bg="' + o[0] + '" aria-pressed="' + (S.shared.bg.mode === o[0]) + '"><span class="sw">' + o[3] + '</span><span><b>' + o[1] + '</b><span>' + o[2] + '</span></span></button>').join('')
@@ -1294,6 +1450,7 @@ function renderPeople(body){
 function leave(how){
   if (S.ended) return;
   S.ended = true; closeModal();
+  Presence.gone();
   const dur = S.callStart ? Math.round((now() - S.callStart) / 1000) : 0;
   logEvent(how === 'ended' ? 'end' : 'leave', { dur });
   Studio.stop();
@@ -1320,7 +1477,7 @@ function leave(how){
   }
   if ($('#eRe')) $('#eRe').onclick = () => location.reload();
 }
-window.addEventListener('pagehide', () => { if (!S.ended && S.callStart) logEvent('leave', { dur:Math.round((now() - S.callStart) / 1000) }); });
+window.addEventListener('pagehide', () => { if (!S.ended && S.callStart) logEvent('leave', { dur:Math.round((now() - S.callStart) / 1000) }); if (!S.ended) Presence.gone(); });
 
 boot();
 })();
