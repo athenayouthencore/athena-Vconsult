@@ -1541,7 +1541,7 @@ const Studio = {
       document.head.appendChild(s);
     }).then(() => {
       this.seg = new SelfieSegmentation({ locateFile:f => 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1/' + f });
-      this.seg.setOptions({ modelSelection:1 });
+      this.seg.setOptions({ modelSelection:0, selfieMode:false });   // 0 = general model: more accurate edges for a laptop camera
       this.seg.onResults(r => this.draw(r));
     });
     return this.loading;
@@ -1561,10 +1561,33 @@ const Studio = {
     if (C.studioImage){ const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = () => { g.clearRect(0, 0, w, h); paint(img); }; img.onerror = () => toast('Studio image could not load. Check studioImage in config.js.'); img.src = C.studioImage; }
     return c;
   },
+  /* Smooth the person outline over time so fast hand movements don't flicker or tear.
+     acc = 0.55 * newMask + 0.45 * previousMask, then a soft feathered edge. */
+  smoothMask(mask, w, h){
+    const mw = Math.round(w / 2), mh = Math.round(h / 2);          // half-size is plenty for a mask and keeps it fast
+    if (!this.mA || this.mA.width !== mw || this.mA.height !== mh){
+      this.mA = document.createElement('canvas'); this.mB = document.createElement('canvas');
+      [this.mA, this.mB].forEach(c => { c.width = mw; c.height = mh; });
+      this.mAx = this.mA.getContext('2d'); this.mBx = this.mB.getContext('2d'); this.mFirst = true;
+    }
+    const a = 0.55, prev = this.mA, next = this.mB, nx = this.mBx;
+    nx.globalCompositeOperation = 'source-over'; nx.globalAlpha = 1; nx.filter = 'none';
+    nx.clearRect(0, 0, mw, mh);
+    if (this.mFirst){ nx.drawImage(mask, 0, 0, mw, mh); this.mFirst = false; }
+    else {
+      nx.globalAlpha = 1 - a; nx.drawImage(prev, 0, 0);
+      nx.globalCompositeOperation = 'lighter'; nx.globalAlpha = a; nx.drawImage(mask, 0, 0, mw, mh);
+      nx.globalCompositeOperation = 'source-over'; nx.globalAlpha = 1;
+    }
+    // swap
+    this.mA = next; this.mB = prev; const t = this.mAx; this.mAx = this.mBx; this.mBx = t;
+    return this.mA;
+  },
   draw(r){
     const g = this.ctx, w = this.canvas.width, h = this.canvas.height;
+    const m = this.smoothMask(r.segmentationMask, w, h);
     g.save(); g.clearRect(0, 0, w, h);
-    g.filter = 'blur(2px)'; g.drawImage(r.segmentationMask, 0, 0, w, h); g.filter = 'none';
+    g.filter = 'blur(' + Math.max(3, Math.round(w / 320)) + 'px)'; g.drawImage(m, 0, 0, w, h); g.filter = 'none';
     g.globalCompositeOperation = 'source-in'; g.drawImage(r.image, 0, 0, w, h);
     g.globalCompositeOperation = 'destination-over';
     if (this.mode === 'blur'){ g.filter = 'blur(16px)'; g.drawImage(r.image, 0, 0, w, h); g.filter = 'none'; }
@@ -1588,7 +1611,7 @@ const Studio = {
     this.canvas.width = w; this.canvas.height = h;
     this.bgCanvas = this.makeBg(w, h);
     this.src.srcObject = new MediaStream([S.rawVideo]); await this.src.play().catch(() => {});
-    this.mode = mode;
+    this.mode = mode; this.mFirst = true;
     document.body.classList.toggle('studio-on', mode === 'studio' || mode === 'video');
     if (mode === 'video') this.startFilm(); else this.stopFilm();
     if (!this.outTrack || this.outTrack.readyState === 'ended'){ this.outTrack = this.canvas.captureStream(24).getVideoTracks()[0]; }
@@ -1601,7 +1624,7 @@ const Studio = {
     const step = async () => {
       if (this.mode === 'off') return;
       if (!this.busy && this.src.readyState >= 2){ this.busy = true; try { await this.seg.send({ image:this.src }); } catch(e){} this.busy = false; }
-      this.loop = setTimeout(step, 40);
+      this.loop = setTimeout(step, 15);   // run as fast as the model allows (about 25–30 fps on a laptop)
     };
     step();
   },
