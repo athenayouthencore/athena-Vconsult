@@ -421,6 +421,13 @@ body.role-p.has-room #scr-welcome > .panel-card::before{background:rgba(184,151,
   body.role-p.has-room #scr-welcome > .panel-card{width:min(470px,42vw);padding:40px 32px 34px}
   body.role-p.has-room #scr-welcome h1.title{font-size:36px}
 }
+/* Waiting card: small, low, see-through — keeps the clinic wallpaper visible */
+#waitCard{align-items:flex-end!important;padding-bottom:28px!important}
+#waitCard .panel-card{width:min(440px,92%);padding:18px 24px 18px;background:rgba(22,15,27,.5);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-color:rgba(217,188,140,.35);box-shadow:0 18px 50px rgba(6,3,8,.35)}
+#waitCard h1.title{font-size:22px;margin:0 0 4px}
+#waitCard .lead{display:none}
+#waitCard .presence-list{margin-top:10px}
+#waitCard .presence{font-size:13.5px;padding:8px 12px}
 /* No decorative arch tiles on the cards — text and buttons only */
 #scr-welcome .arch,#scr-end .arch,#scr-browser .arch,#waitCard .arch{display:none!important}
 #scr-welcome h1.title,#scr-end h1.title,#scr-browser h1.title,#waitCard h1.title{margin-top:4px}
