@@ -156,6 +156,7 @@ body.studio-on .tile.self video{transform:none}
 .tile.pip0{bottom:14px}.tile.pip1{bottom:calc(14px + clamp(110px,20vw,240px) * .625 + 10px)}
 .tile.solo{left:50%;top:50%;width:min(440px,90%);aspect-ratio:4/3;transform:translate(-50%,-50%);border-radius:var(--r-lg)}
 body.role-p .tile.main video{object-fit:cover}
+.tile.fit-whole video,body.role-p .tile.main.fit-whole video{object-fit:contain!important}
 @media (max-width:700px){
   :root{--top:58px;--bottom:96px}
   #stage{padding:4px 10px 8px}
@@ -1066,15 +1067,23 @@ function paintTile(r){
   t.classList.toggle('mic-off', !av.mic);
   t.classList.toggle('cam-off', !av.cam);
 }
+function fitTile(t){
+  const v = t && t.querySelector('video'); if (!v || !v.videoWidth || t.classList.contains('self')) return;
+  const tr = t.clientWidth / Math.max(1, t.clientHeight), vr = v.videoWidth / v.videoHeight;
+  const crop = 1 - Math.min(tr, vr) / Math.max(tr, vr);       // share of the picture that cover-fit would cut off
+  t.classList.toggle('fit-whole', crop > 0.22);
+}
+window.addEventListener('resize', () => document.querySelectorAll('.tile').forEach(fitTile));
 function setTileStream(r, stream){
   const t = ensureTile(r); const v = t.querySelector('video');
-  if (v.srcObject !== stream) v.srcObject = stream;
+  if (v.srcObject !== stream){ v.srcObject = stream; v.onloadedmetadata = v.onresize = () => fitTile(t); }
   t.classList.toggle('no-media', !stream);
   if (stream){ const p = v.play(); if (p && p.catch) p.catch(() => { if (r !== ME) toast('Tap anywhere to turn on sound'); document.addEventListener('click', () => v.play().catch(() => {}), { once:true }); }); }
 }
 function removeTile(r){ const t = document.querySelector('.tile[data-role="' + r + '"]'); if (t) t.remove(); }
 
 function layout(){
+  setTimeout(() => document.querySelectorAll('.tile').forEach(fitTile), 500);
   const up = OTHERS.filter(r => S.peers[r].media);
   const order = ME === 'p' ? ['d','c'] : (ME === 'd' ? ['p','c'] : ['p','d']);
   const primary = order.find(r => up.includes(r));
@@ -1573,7 +1582,10 @@ const Studio = {
       g.fillStyle = 'rgba(217,188,140,.55)'; g.font = Math.round(h * .055) + 'px Marcellus, serif'; g.textAlign = 'right'; g.fillText('A T H E N A', w * .94, h * .9);
     };
     paint(null);
-    if (C.studioImage){ const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = () => { g.clearRect(0, 0, w, h); paint(img); }; img.onerror = () => toast('Studio image could not load. Check studioImage in config.js.'); img.src = C.studioImage; }
+    // upright camera (phone) → tall image; sideways/laptop camera → wide image. Avoids heavy zoom.
+    const tall = h > w;
+    const src = tall ? (C.studioImageMobile || C.roomImageMobile || C.studioImage) : (C.studioImage || C.roomImage);
+    if (src){ const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = () => { g.clearRect(0, 0, w, h); paint(img); }; img.onerror = () => toast('Studio image could not load. Check studioImage in config.js.'); img.src = src; }
     return c;
   },
   /* Smooth the person outline over time so fast hand movements don't flicker or tear.

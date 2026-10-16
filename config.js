@@ -32,8 +32,9 @@ window.ATHENA_CONFIG = {
   /* ---- Studio background image for the doctor's camera (optional) --
      Must be a file inside this website (e.g. 'assets/studio.jpg'),
      NOT a link to another site, otherwise the browser blocks it.      */
-  studioImage: 'assets/room.jpg',
-  doctorBackground: 'room',          // 'room' = clinic image behind the doctor (auto on), 'film' = Backdrop films, 'off' = real camera
+  studioImage: 'assets/room.jpg',          // behind the doctor on a laptop / sideways camera
+  studioImageMobile: 'assets/room-mobile.jpg', // behind the doctor on an upright phone camera
+  doctorBackground: 'room',          // 'room' = clinic image behind the doctor, 'off' = real camera, 'film' = Backdrop films
 
   /* ---- Backdrop behaviour ------------------------------------------ */
   defaultBackdrop: 'mix',            // 'branding' | 'procedure' | 'marketing' | 'mix' | 'calm'
