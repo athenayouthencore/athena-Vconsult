@@ -34,7 +34,7 @@ window.ATHENA_CONFIG = {
      NOT a link to another site, otherwise the browser blocks it.      */
   studioImage: 'assets/room.jpg',          // behind the doctor on a laptop / sideways camera
   studioImageMobile: 'assets/room-mobile.jpg', // behind the doctor on an upright phone camera
-  doctorBackground: 'room',          // 'room' = clinic image behind the doctor, 'off' = real camera, 'film' = Backdrop films
+  doctorBackground: 'off',           // 'off' = real camera (recommended), 'room' = clinic image behind the doctor, 'film' = Backdrop films
 
   /* ---- Backdrop behaviour ------------------------------------------ */
   defaultBackdrop: 'mix',            // 'branding' | 'procedure' | 'marketing' | 'mix' | 'calm'

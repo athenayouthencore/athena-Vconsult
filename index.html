@@ -422,6 +422,21 @@ body.role-p.has-room #scr-welcome > .panel-card::before{background:rgba(184,151,
   body.role-p.has-room #scr-welcome > .panel-card{width:min(470px,42vw);padding:40px 32px 34px}
   body.role-p.has-room #scr-welcome h1.title{font-size:36px}
 }
+/* Connected: wallpaper fades out, the other person's video fills the screen edge to edge */
+#backdrop .bd-room,#backdrop .bd-room-sharp,#backdrop video{transition:opacity .8s ease}
+body.connected #backdrop .bd-room,body.connected #backdrop .bd-room-sharp,body.connected #backdrop video{opacity:0!important}
+body.connected #backdrop{background:#0D0A10}
+body.connected:not(.edu-on) #stage{top:0;bottom:0;left:0;right:0;padding:0}
+body.connected.panel-open:not(.edu-on) #stage{right:388px}
+body.connected:not(.edu-on) .tile.main{border-radius:0;border:0;box-shadow:none;background:#0D0A10}
+body.connected:not(.edu-on) .tile.main .label{bottom:calc(var(--bottom) + var(--safe-b) + 14px)}
+body.connected:not(.edu-on) .tile.pip0{bottom:calc(var(--bottom) + var(--safe-b) + 14px)}
+body.connected:not(.edu-on) .tile.pip1{bottom:calc(var(--bottom) + var(--safe-b) + 14px + clamp(110px,20vw,240px) * .625 + 10px)}
+body.connected:not(.edu-on) .tile.pip{top:auto}
+body.connected #brand{opacity:0;pointer-events:none}
+@media (max-width:700px){
+  body.connected:not(.edu-on) .tile.pip1{bottom:calc(var(--bottom) + var(--safe-b) + 14px + 31vw * 1.333 + 10px)}
+}
 /* Arrival announcement: text only, no arch */
 #arrive .arr-stage{display:none!important}
 #arrive .arr-card{width:min(420px,100%);padding:26px 24px 22px}
@@ -1071,7 +1086,7 @@ function fitTile(t){
   const v = t && t.querySelector('video'); if (!v || !v.videoWidth || t.classList.contains('self')) return;
   const tr = t.clientWidth / Math.max(1, t.clientHeight), vr = v.videoWidth / v.videoHeight;
   const crop = 1 - Math.min(tr, vr) / Math.max(tr, vr);       // share of the picture that cover-fit would cut off
-  t.classList.toggle('fit-whole', crop > 0.22);
+  t.classList.toggle('fit-whole', crop > 0.45);   // only letterbox when filling would cut off almost half the picture (e.g. a laptop video on an upright phone)
 }
 window.addEventListener('resize', () => document.querySelectorAll('.tile').forEach(fitTile));
 function setTileStream(r, stream){
@@ -1091,6 +1106,7 @@ function layout(){
   tiles.forEach(t => t.classList.remove('main','pip','pip0','pip1','solo'));
   const waiting = !primary;
   $('#waitCard').classList.toggle('hidden', !waiting);
+  document.body.classList.toggle('connected', !waiting);   // wallpaper only while waiting; clean full-screen video once connected
   if (waiting){
     const self = document.querySelector('.tile.self');
     if (self) self.classList.add('pip','pip0');
