@@ -448,6 +448,15 @@ body.connected #brand{opacity:0;pointer-events:none}
 #waitCard .lead{display:none}
 #waitCard .presence-list{margin-top:10px}
 #waitCard .presence{font-size:13.5px;padding:8px 12px}
+#waitCard h1.title{white-space:normal;overflow-wrap:anywhere}
+#waitHelp{margin-top:12px;text-align:center}
+#waitHelp p{margin:0 0 10px;font-size:13.5px;line-height:1.45;color:var(--ivory,#f5ecdd);opacity:.92}
+#waitHelp .btn-line{padding:10px 22px;font-size:14px}
+/* Phones held upright: card sits at the top so your own small video never covers it */
+@media (orientation:portrait){
+  #waitCard{align-items:flex-start!important;padding-top:84px!important;padding-bottom:10px!important}
+  #waitCard .panel-card{width:min(440px,94%)}
+}
 /* No decorative arch tiles on the cards — text and buttons only */
 #scr-welcome .arch,#scr-end .arch,#scr-browser .arch,#waitCard .arch{display:none!important}
 #scr-welcome h1.title,#scr-end h1.title,#scr-browser h1.title,#waitCard h1.title{margin-top:4px}
@@ -523,6 +532,7 @@ body.connected #brand{opacity:0;pointer-events:none}
           <h1 class="title" id="waitTitle">Your doctor will join shortly</h1>
           <p class="lead" id="waitLead">Please stay on this screen. You'll see and hear them as soon as they connect.</p>
           <div id="waitPresence" class="presence-list" aria-live="polite"></div>
+          <div id="waitHelp" class="hidden" aria-live="polite"><p id="waitHelpTxt"></p><button class="btn-line" id="waitRetry" type="button">Reconnect</button></div>
         </div>
       </div>
     </div>
@@ -659,7 +669,7 @@ const S = {
   names:{ d:'', c:'', p:'' }, titles:{ d:'', c:'Patient counsellor', p:'' },
   rawStream:null, sendStream:null, audioTrack:null, rawVideo:null, sendVideo:null,
   micOn:true, camOn:true, hasCam:true,
-  peers:{}, peer:null, idRetries:0,
+  peers:{}, peer:null, idRetries:0, sid:Math.random().toString(36).slice(2, 10), myPid:'', joinAt:0, notOpenSince:0, lastRestart:0,
   lamport:0,
   shared:{ bg:{ mode:C.defaultBackdrop, v:0 }, edu:{ key:null, item:null, at:0, playing:false, v:0, owner:'' } },
   hearLocal:false, micBeforeEdu:null,
@@ -819,17 +829,30 @@ async function boot(){
    LIVE PRESENCE — who has the link open / is in the room
    ====================================================================== */
 const Presence = {
-  st:'lobby', people:null, timer:null,
-  start(){ if (!C.apiUrl || !ROOM) return; this.beat(); this.timer = setInterval(() => this.beat(), 12000); },
-  set(st){ this.st = st; this.beat(); },
-  url(st){ return C.apiUrl + (C.apiUrl.indexOf('?') > -1 ? '&' : '?') + new URLSearchParams({ api:'beat', r:ROOM, as:ME, st }).toString(); },
-  beat(){
-    if (S.ended && this.st !== 'gone') return;
-    api({ api:'beat', r:ROOM, as:ME, st:this.st }, 9000).then(j => { if (j && j.ok && j.people) this.update(j.people); }).catch(() => {});
+  st:'lobby', people:null, timer:null, on:false,
+  start(){ if (!C.apiUrl || !ROOM) return; this.on = true; this.loop(); },
+  // every 5 s while waiting in the room, every 12 s otherwise
+  loop(){
+    clearTimeout(this.timer); if (!this.on || S.ended) return;
+    this.beat();
+    this.timer = setTimeout(() => this.loop(), (this.st === 'call' && !anyMedia()) ? 5000 : 12000);
   },
-  gone(){ clearInterval(this.timer); this.st = 'gone'; try { fetch(this.url('gone'), { keepalive:true, mode:'no-cors' }); } catch(e){} },
-  update(people){
+  set(st){ this.st = st; if (this.on) this.loop(); },
+  myId(){ return (S.peer && S.peer.open && S.peer.id) || ''; },
+  url(st){ return C.apiUrl + (C.apiUrl.indexOf('?') > -1 ? '&' : '?') + new URLSearchParams({ api:'beat', r:ROOM, as:ME, st, id:this.myId(), sid:S.sid }).toString(); },
+  beat(){
+    if (!this.on || (S.ended && this.st !== 'gone')) return;
+    api({ api:'beat', r:ROOM, as:ME, st:this.st, id:this.myId(), sid:S.sid }, 9000).then(j => { if (j && j.ok && j.people) this.update(j.people, j.ids); }).catch(() => {});
+  },
+  gone(){ clearTimeout(this.timer); this.on = false; this.st = 'gone'; try { fetch(this.url('gone'), { keepalive:true, mode:'no-cors' }); } catch(e){} },
+  update(people, ids){
     const prev = this.people; this.people = people;
+    // learn where the others can be reached right now (fresh tab / fresh ID)
+    if (ids) OTHERS.forEach(r => {
+      const P = S.peers[r];
+      if (ids[r] && !P.media && people[r] === 'call' && ids[r] !== peerId(r)){ P.pid = ids[r]; P.dialAt = 0; P.knockAt = 0; }
+    });
+    if (S.joinAt && OTHERS.some(r => people[r] === 'call' && !S.peers[r].media && (!prev || prev[r] !== 'call'))) setTimeout(tick, 100);
     OTHERS.forEach(r => {
       const a = prev ? (prev[r] || 'away') : 'away', b = people[r] || 'away';
       if (a === b || S.peers[r].media) return;
@@ -846,7 +869,7 @@ const Presence = {
   }
 };
 function presenceLine(r){
-  const st = (Presence.people && Presence.people[r]) || 'away';
+  const st = (S.peers[r] && S.peers[r].data) ? 'call' : ((Presence.people && Presence.people[r]) || 'away');
   const n = tileLabel(r).name;
   let cls = '', txt;
   const doc = S.names.d || 'the doctor';
@@ -936,6 +959,7 @@ function chime(){
 
 $('#btnCopyMe').onclick = () => copyText(location.href);
 $('#btnJoin').onclick = () => join('full');
+$('#waitRetry').onclick = () => manualReconnect();
 $('#btnJoinAudio').onclick = () => join('audio');
 
 async function getMedia(mode){
@@ -990,14 +1014,15 @@ async function join(mode){
   S.sendStream = new MediaStream([S.sendVideo, S.audioTrack].filter(Boolean));
 
   try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
-  document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && !S.ended){ try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){} if (S.peer && S.peer.disconnected && !S.peer.destroyed) S.peer.reconnect(); } });
+  document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && !S.ended){ try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){} } });
 
   try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch(e){}
+  S.joinAt = now();
   Presence.set('call');
   enterCall();
-  await Promise.race([S._iceP, new Promise(r => setTimeout(r, 1200))]);
-  startPeer();
-  logEvent('join');
+  await Promise.race([S._iceP, new Promise(r => setTimeout(r, 1500))]);
+  startPeer(false);
+  logEvent('join', { d:(hasTurn() ? 'relay on' : 'relay off') + ' / ' + (navigator.connection && navigator.connection.effectiveType || '') });
 }
 
 /* ======================================================================
@@ -1129,6 +1154,7 @@ function layout(){
     const self = document.querySelector('.tile.self'); if (self) self.classList.add('pip', 'pip' + Math.min(pipN, 1));
     if (pipN > 1 && self) self.classList.add('hidden'); else if (self) self.classList.remove('hidden');
   }
+  if (waiting){ S.waitTitle = $('#waitTitle').textContent; paintWaitHelp(); }
   OTHERS.filter(r => !S.peers[r].media).forEach(r => { const t = document.querySelector('.tile[data-role="' + r + '"]'); if (t) t.classList.add('hidden'); });
   OTHERS.filter(r => S.peers[r].media).forEach(r => { const t = document.querySelector('.tile[data-role="' + r + '"]'); if (t) t.classList.remove('hidden'); });
   if (!$('#panel').classList.contains('hidden') && S.panelTab === 'people') renderPanel();
@@ -1185,62 +1211,129 @@ setInterval(() => { if (S.callStart && !S.ended){ $('#timer').textContent = fmt(
    CONNECTION (WebRTC mesh via PeerJS — free public signalling)
    Lower-rank roles wait; higher-rank roles dial: patient → doctor & counsellor, counsellor → doctor.
    ====================================================================== */
-function peerId(r){ return C.peerPrefix + ROOM.toLowerCase() + '-' + r; }
-function roleFromId(id){ const m = String(id || '').match(/-([dcp])$/); return m ? m[1] : null; }
+/* Peer IDs. Each role first tries its fixed ID (…-d / …-c / …-p). If that ID is still held by an old
+   tab or a dead connection, the page takes a fresh one (…-p-x7k2m9) and tells the others through
+   presence, knocks and calls — so a stale tab can never block the consult again. */
+function baseId(r){ return C.peerPrefix + ROOM.toLowerCase() + '-' + r; }
+function peerId(r){ return (S.peers[r] && S.peers[r].pid) || baseId(r); }   // where role r can be reached right now
+function roleFromId(id){ const m = String(id || '').match(/-([dcp])(?:-[a-z0-9]+)?$/); return m ? m[1] : null; }
+function rid(){ return Math.random().toString(36).slice(2, 8); }
+function anyMedia(){ return OTHERS.some(r => S.peers[r].media); }
+function present(r){ return !!(Presence.people && Presence.people[r] === 'call'); }
+function hasTurn(){ return (S.ice || []).some(s => [].concat(s.urls || []).some(u => /^turns?:/i.test(u))); }
+function pcState(call){ const pc = call && call.peerConnection; return pc ? pc.iceConnectionState : 'new'; }
+function diag(what, extra){ try { logEvent('diag', { d:String(what) + (extra ? ' ' + extra : '') + (hasTurn() ? ' turn' : ' noturn') }); } catch(e){} }
 
-function startPeer(){
+function startPeer(fresh){
   if (S.ended) return;
+  S.myPid = fresh ? baseId(ME) + '-' + rid() : baseId(ME);
   const opts = Object.assign({ debug:1, config:{ iceServers:S.ice } }, C.peerServer || {});
-  const peer = new Peer(peerId(ME), opts);
-  S.peer = peer;
+  let peer;
+  try { peer = new Peer(S.myPid, opts); } catch(e){ setTimeout(() => startPeer(true), 3000); return; }
+  S.peer = peer; S.notOpenSince = now();
   peer.on('open', () => {
-    S.idRetries = 0; netWarn(false);
-    OTHERS.forEach(r => { S.peers[r].dialAt = 0; });
+    if (S.peer !== peer) return;
+    S.notOpenSince = 0; netWarn(false);
+    OTHERS.forEach(r => { S.peers[r].dialAt = 0; S.peers[r].knockAt = 0; });
+    Presence.beat();                                   // publish my ID straight away
     tick();
     OTHERS.forEach(r => { if (RANK[r] > RANK[ME]) knock(r); });
   });
-  peer.on('call', onIncomingCall);
-  peer.on('connection', onIncomingConn);
-  peer.on('disconnected', () => { if (S.ended) return; netWarn(true); setTimeout(() => { if (!peer.destroyed && peer.disconnected) peer.reconnect(); }, 1500); });
+  peer.on('call', c => { if (S.peer === peer) onIncomingCall(c); else try { c.close(); } catch(e){} });
+  peer.on('connection', c => { if (S.peer === peer) onIncomingConn(c); else try { c.close(); } catch(e){} });
+  peer.on('disconnected', () => {
+    if (S.ended || S.peer !== peer) return;
+    netWarn(true);
+    setTimeout(() => { if (S.peer === peer && !peer.destroyed && peer.disconnected) try { peer.reconnect(); } catch(e){} }, 1500);
+  });
   peer.on('error', e => {
-    if (S.ended) return;
+    if (S.ended || S.peer !== peer) return;
     const type = e && e.type;
-    if (type === 'peer-unavailable') return;
-    if (type === 'unavailable-id'){
-      S.idRetries++;
-      if (S.idRetries === 3) toast('This link seems to be open on another screen. Close it there to continue here.', 6000);
-      peer.destroy(); setTimeout(startPeer, 4000); return;
+    if (type === 'peer-unavailable'){ onUnavailable(String(e.message || '')); return; }
+    if (type === 'unavailable-id'){           // our fixed ID is still held (old tab / dead link) → take a fresh one now
+      diag('idtaken', ME);
+      S.peer = null; try { peer.destroy(); } catch(x){}
+      setTimeout(() => startPeer(true), 200); return;
     }
     if (type === 'browser-incompatible'){ show('#scr-browser'); return; }
     netWarn(true);
-    setTimeout(() => { if (S.ended) return; if (peer.destroyed) startPeer(); else if (peer.disconnected) peer.reconnect(); }, 3000);
+    setTimeout(() => {
+      if (S.ended || S.peer !== peer) return;
+      if (peer.destroyed){ S.peer = null; startPeer(true); }
+      else if (peer.disconnected) try { peer.reconnect(); } catch(x){}
+    }, 3000);
   });
 }
+/* The other side isn't at the address we tried: forget a stale fresh-ID and try again soon. */
+function onUnavailable(msg){
+  OTHERS.forEach(r => {
+    const P = S.peers[r];
+    if (P.media || msg.indexOf(peerId(r)) < 0) return;
+    if (P.pid && P.pid !== baseId(r)) P.pid = null;
+    if (P.call){ try { P.call.close(); } catch(e){} P.call = null; }
+    if (P.conn && !P.data){ try { P.conn.close(); } catch(e){} P.conn = null; }
+    P.dialAt = now() - 2500;                   // redial in ~2.5 s
+  });
+}
+/* Full rebuild of our side of the connection (used when we're stuck). Never while a call is working. */
+function restartPeer(why, manual){
+  if (S.ended || anyMedia()) return;
+  if (!manual && now() - (S.lastRestart || 0) < 45000) return;
+  S.lastRestart = now(); diag('restart', why);
+  OTHERS.forEach(r => {
+    const P = S.peers[r];
+    try { P.call && P.call.close(); } catch(e){} try { P.conn && P.conn.close(); } catch(e){}
+    P.call = null; P.conn = null; P.data = false; P.dialAt = 0; P.knockAt = 0; P.stuckSince = 0;
+  });
+  const old = S.peer; S.peer = null;
+  try { old && old.destroy(); } catch(e){}
+  setTimeout(() => startPeer(false), 600);
+}
 function netWarn(on){ $('#netPill').classList.toggle('hidden', !on); }
+function peerReady(){ return !!(S.peer && S.peer.open && !S.peer.disconnected && !S.peer.destroyed); }
 
-function dial(r){
-  const P = S.peers[r]; if (!S.peer || S.peer.disconnected || S.peer.destroyed) return;
+function dial(r, force){
+  const P = S.peers[r]; if (!peerReady()) return;
+  // let a call that is still connecting finish (slow mobile data / relay can need 10+ s)
+  const pending = P.call && !P.media && !/failed|closed/.test(pcState(P.call)) && now() - (P.dialAt || 0) < 15000;
+  const pendingData = P.conn && !P.data && now() - (P.dialAt || 0) < 10000;
+  if (!force && (pending || (P.media && pendingData))) return;
   P.dialAt = now();
+  const to = peerId(r);
   if (P.call && !P.media){ try { P.call.close(); } catch(e){} P.call = null; }
   if (P.conn && !P.data){ try { P.conn.close(); } catch(e){} P.conn = null; }
-  if (!P.data){ const conn = S.peer.connect(peerId(r), { reliable:true, serialization:'json', metadata:{ as:ME } }); if (conn) wireConn(r, conn); }
-  if (!P.media){ const call = S.peer.call(peerId(r), S.sendStream, { metadata:{ as:ME } }); if (call) wireCall(r, call); }
+  if (!P.data){ const conn = S.peer.connect(to, { reliable:true, serialization:'json', metadata:{ as:ME, sid:S.sid } }); if (conn) wireConn(r, conn); }
+  if (!P.media){ const call = S.peer.call(to, S.sendStream, { metadata:{ as:ME, sid:S.sid } }); if (call) wireCall(r, call); }
+}
+/* Someone new for role r is reaching us from a different tab/device: tell the old one to step aside. */
+function retire(r, newPeer){
+  const P = S.peers[r];
+  if (P.conn && P.data && P.conn.peer && P.conn.peer !== newPeer){ try { P.conn.send({ t:'moved' }); } catch(e){} }
+}
+function noteRemote(r, peerIdSeen, md){
+  const P = S.peers[r];
+  if (peerIdSeen) P.pid = peerIdSeen;
+  const restarted = !!(md && md.sid && md.sid !== P.sid);
+  if (md && md.sid) P.sid = md.sid;
+  return restarted;
 }
 function onIncomingCall(call){
   const r = (call.metadata && call.metadata.as) || roleFromId(call.peer);
   if (!S.peers[r]) { call.close(); return; }
   const P = S.peers[r];
+  retire(r, call.peer);
+  noteRemote(r, call.peer, call.metadata);
   if (P.call && P.call !== call){ const old = P.call; P.call = null; try { old.close(); } catch(e){} }
   call.answer(S.sendStream);
   wireCall(r, call);
 }
-/* "Knock": a tiny ping telling the other side "I'm here now, call me".
-   Without it the caller only retries on its own timer, which made joins take 10+ seconds. */
+/* "Knock": a tiny ping telling the other side "I'm here now, call me". */
 function knock(r){
-  if (!S.peer || S.peer.disconnected || S.peer.destroyed || S.ended) return;
-  if (S.peers[r].media) return;
+  if (!peerReady() || S.ended) return;
+  const P = S.peers[r]; if (P.media) return;
+  P.knockAt = now();
   try {
-    const k = S.peer.connect(peerId(r), { reliable:true, serialization:'json', metadata:{ as:ME, knock:true } });
+    const k = S.peer.connect(peerId(r), { reliable:true, serialization:'json', metadata:{ as:ME, knock:true, sid:S.sid } });
     if (!k) return;
     k.on('open', () => setTimeout(() => { try { k.close(); } catch(e){} }, 1500));
     k.on('error', () => {});
@@ -1249,29 +1342,53 @@ function knock(r){
 function onIncomingConn(conn){
   const r = (conn.metadata && conn.metadata.as) || roleFromId(conn.peer);
   if (!S.peers[r]) { conn.close(); return; }
+  const P = S.peers[r];
   if (conn.metadata && conn.metadata.knock){
     conn.on('open', () => setTimeout(() => { try { conn.close(); } catch(e){} }, 1500));
-    const P0 = S.peers[r];
-    if (RANK[r] < RANK[ME] && !P0.media){ P0.dialAt = 0; dial(r); }
-    else if (RANK[r] > RANK[ME] && !P0.media) knock(r);
+    if (P.media && P.call && P.call.peer === conn.peer) return;       // already talking to that exact tab
+    const restarted = noteRemote(r, conn.peer, conn.metadata);
+    if (P.media && !restarted) return;
+    if (P.media && restarted){                 // same person opened the link again (new tab / device): newest screen wins
+      retire(r, conn.peer);
+      const oc = P.call, on = P.conn; P.call = null; P.conn = null; P.media = false; P.data = false; P.stream = null;
+      try { oc && oc.close(); } catch(e){} try { on && on.close(); } catch(e){}
+      P._downToast = true; layout();
+    }
+    if (RANK[r] < RANK[ME]) dial(r, true);                           // they're waiting for our call → call now
+    else knock(r);                                                    // they should call us → knock back
     return;
   }
-  const P = S.peers[r];
-  if (P.conn && P.conn !== conn){ const old = P.conn; P.conn = null; try { old.close(); } catch(e){} }
+  retire(r, conn.peer);
+  noteRemote(r, conn.peer, conn.metadata);
+  if (P.conn && P.conn !== conn){ const old = P.conn; P.conn = null; P.data = false; try { old.close(); } catch(e){} }
   wireConn(r, conn);
+}
+/* Watch the media link itself, from the first second (not only after the picture arrives). */
+function watchPc(r, call){
+  const P = S.peers[r]; const pc = call && call.peerConnection;
+  if (!pc || pc._athena) return; pc._athena = 1;
+  pc.addEventListener('iceconnectionstatechange', () => {
+    if (P.call !== call || S.ended) return;
+    const s = pc.iceConnectionState;
+    if (s === 'connected' || s === 'completed'){ clearTimeout(P.discT); P.lastSeen = now(); }
+    else if (s === 'failed'){ diag('icefail', r); peerDown(r); }
+    else if (s === 'disconnected'){
+      clearTimeout(P.discT);
+      P.discT = setTimeout(() => { if (P.call === call && pc.iceConnectionState === 'disconnected'){ diag('icedrop', r); peerDown(r); } }, 8000);
+    }
+  });
+  pc.addEventListener('connectionstatechange', () => { if (P.call === call && pc.connectionState === 'failed') peerDown(r); });
 }
 function wireCall(r, call){
   const P = S.peers[r]; P.call = call;
+  watchPc(r, call);
   call.on('stream', st => {
     if (P.call !== call) return;
     P.stream = st; P.lastSeen = now();
-    const first = !P.media; P.media = true;
+    const first = !P.media; P.media = true; P.stuckSince = 0;
     setTileStream(r, st); paintTile(r);
     if (first) peerUp(r);
-    const pc = call.peerConnection;
-    if (pc && !pc._athena){ pc._athena = 1;
-      pc.addEventListener('connectionstatechange', () => { if (P.call === call && pc.connectionState === 'failed') peerDown(r); });
-    }
+    watchPc(r, call);
     if (S.sendVideo !== S.rawVideo) replaceVideoTrack(S.sendVideo);
     tuneSenders(call.peerConnection);
   });
@@ -1285,8 +1402,9 @@ function wireConn(r, conn){
     P.data = true; P.lastSeen = now();
     send(r, { t:'hello', as:ME, name:S.names[ME] || '', title:(ME === 'd' ? S.titles.d : (ME === 'c' ? S.titles.c : '')), av:{ mic:S.micOn, cam:S.camOn } });
     if (IS_HOST) send(r, { t:'sync', bg:S.shared.bg, edu:eduOut() });
+    paintPresence();
   });
-  conn.on('data', d => onData(r, d));
+  conn.on('data', d => { if (P.conn === conn || (d && d.t === 'moved')) onData(r, d); });
   conn.on('close', () => { if (P.conn === conn){ P.data = false; P.conn = null; } });
   conn.on('error', () => { if (P.conn === conn){ P.data = false; P.conn = null; } });
 }
@@ -1297,39 +1415,92 @@ function peerUp(r){
   if (S.peers[r]._downToast) flash(tileLabel(r).name + ' is back in the call', 'ok');
   else announce(r, true);
   S.peers[r]._downToast = false;
-  layout(); paintPresence();
+  layout(); paintPresence(); paintWaitHelp();
 }
 function peerDown(r){
   const P = S.peers[r];
   const was = P.media;
-  try { P.call && P.call.close(); } catch(e){}
-  try { P.conn && P.conn.close(); } catch(e){}
+  clearTimeout(P.discT);
+  const oc = P.call, on = P.conn;
   P.call = null; P.conn = null; P.media = false; P.data = false; P.stream = null; P.dialAt = 0;
+  try { oc && oc.close(); } catch(e){}
+  try { on && on.close(); } catch(e){}
   const t = document.querySelector('.tile[data-role="' + r + '"]'); if (t){ const v = t.querySelector('video'); v.srcObject = null; t.classList.add('no-media'); }
-  if (!S.ended){ if (RANK[r] > RANK[ME]) setTimeout(() => knock(r), 1500); }
-  if (was && !S.ended){ P._downToast = true; flash(tileLabel(r).name + ' left the call. Waiting for them to reconnect\u2026', 'warn'); }
+  if (!S.ended){ if (RANK[r] > RANK[ME]) setTimeout(() => knock(r), 1500); else setTimeout(tick, 800); }
+  if (was && !S.ended){ P._downToast = true; flash(tileLabel(r).name + ' left the call. Waiting for them to reconnect…', 'warn'); }
   layout(); paintPresence();
 }
 function send(r, msg){ const P = S.peers[r]; if (P && P.conn && P.data){ try { P.conn.send(msg); } catch(e){} } }
 function broadcast(msg){ OTHERS.forEach(r => send(r, msg)); }
 
+/* Every 2 seconds: keep every link alive and repair anything that is stuck. */
 function tick(){
-  if (S.ended || !S.peer || S.peer.destroyed) return;
-  OTHERS.forEach(r => {
-    const P = S.peers[r];
-    if (RANK[r] < RANK[ME] && (!P.media || !P.data) && (!P.dialAt || now() - P.dialAt > 5000)) dial(r);
-    if (P.data) send(r, { t:'ping' });
-    if ((P.media || P.data) && P.lastSeen && now() - P.lastSeen > 15000) peerDown(r);
-  });
+  if (S.ended || !S.joinAt) return;
+  const pr = S.peer;
+  // 1. our line to the connection server
+  if (!pr){ /* a restart is already scheduled */ }
+  else if (!pr.open || pr.disconnected){
+    if (!S.notOpenSince) S.notOpenSince = now();
+    else if (now() - S.notOpenSince > 15000 && !anyMedia()){ S.notOpenSince = 0; restartPeer('signal'); }
+  } else S.notOpenSince = 0;
+  if (peerReady()){
+    OTHERS.forEach(r => {
+      const P = S.peers[r];
+      // a working picture keeps the link alive even if the side channel is quiet
+      if (P.media && /connected|completed/.test(pcState(P.call))) P.lastSeen = Math.max(P.lastSeen, now() - 4000);
+      if (RANK[r] < RANK[ME] && (!P.media || !P.data) && (!P.dialAt || now() - P.dialAt > 5000)) dial(r);
+      if (RANK[r] > RANK[ME] && !P.media && (present(r) || !Presence.people) && now() - (P.knockAt || 0) > 8000) knock(r);
+      if (P.data) send(r, { t:'ping' });
+      if ((P.media || P.data) && P.lastSeen && now() - P.lastSeen > 15000) peerDown(r);
+      // 2. both in the room, but no picture for a while → rebuild our side from scratch
+      if (!P.media && present(r)){
+        P.stuckSince = P.stuckSince || now();
+        if (now() - P.stuckSince > (P.stuckLimit || (P.stuckLimit = 28000 + Math.random() * 10000))){ P.stuckSince = 0; P.stuckLimit = 0; restartPeer('stuck'); }
+      } else P.stuckSince = 0;
+    });
+  }
+  paintWaitHelp();
   if (S.shared.edu.key && S.shared.edu.owner === ME && S.shared.edu.playing) broadcast({ t:'pos', key:S.shared.edu.key, at:Player.time() });
 }
 setInterval(tick, 2000);
+
+/* Waiting screen helper: "Dr. X is in the room — connecting you" + a Reconnect button if it takes long. */
+function paintWaitHelp(){
+  const box = $('#waitHelp'); if (!box) return;
+  if (S.ended || anyMedia() || !S.joinAt){ box.classList.add('hidden'); return; }
+  const r = (ME === 'p' ? ['d','c'] : ['p','d','c']).find(x => x !== ME && (present(x) || S.peers[x].data));
+  if (!r){ box.classList.add('hidden'); if (S.waitTitle) $('#waitTitle').textContent = S.waitTitle; return; }
+  const P = S.peers[r];
+  const secs = (now() - (P.stuckSince || now())) / 1000;
+  const who = r === 'd' ? (S.names.d || 'your doctor') : tileLabel(r).name;
+  $('#waitTitle').textContent = (ME === 'p' ? 'Connecting you to ' : 'Connecting to ') + who + '…';
+  $('#waitHelpTxt').textContent = 'Taking longer than usual. Tap Reconnect, or switch between Wi‑Fi and mobile data.';
+  box.classList.toggle('hidden', secs < 12);
+}
+function manualReconnect(){
+  const b = $('#waitRetry'); if (b){ b.disabled = true; setTimeout(() => { b.disabled = false; }, 4000); }
+  OTHERS.forEach(r => { S.peers[r].stuckSince = now(); });
+  if (S.peer && S.peer.disconnected && !S.peer.destroyed){ try { S.peer.reconnect(); } catch(e){} }
+  restartPeer('manual', true);
+}
+/* Coming back to the page (after WhatsApp, lock screen, network change): repair at once. */
+function wake(){
+  if (S.ended || !S.joinAt) return;
+  if (S.peer && S.peer.disconnected && !S.peer.destroyed){ try { S.peer.reconnect(); } catch(e){} }
+  OTHERS.forEach(r => { const P = S.peers[r]; if (!P.media){ P.dialAt = 0; P.knockAt = 0; } });
+  Presence.beat();
+  setTimeout(tick, 400);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
+window.addEventListener('online', wake);
+window.addEventListener('pageshow', e => { if (e.persisted) wake(); });
 
 function onData(r, d){
   const P = S.peers[r]; if (!d || typeof d !== 'object') return;
   P.lastSeen = now();
   switch (d.t){
     case 'ping': break;
+    case 'moved': leave('moved'); break;
     case 'hello':
       if (d.name) S.names[r] = d.name;
       if (d.title !== undefined) S.titles[r] = d.title || (r === 'c' ? 'Patient counsellor' : '');
@@ -1827,7 +1998,7 @@ function leave(how){
   S.ended = true; closeModal();
   Presence.gone();
   const dur = S.callStart ? Math.round((now() - S.callStart) / 1000) : 0;
-  logEvent(how === 'ended' ? 'end' : 'leave', { dur });
+  if (how !== 'moved') logEvent(how === 'ended' ? 'end' : 'leave', { dur });
   Studio.stop();
   try { closeEduLocal(); } catch(e){}
   OTHERS.forEach(r => { const P = S.peers[r]; try { P.call && P.call.close(); } catch(e){} try { P.conn && P.conn.close(); } catch(e){} });
@@ -1849,6 +2020,11 @@ function leave(how){
     $('#eTitle').textContent = how === 'ended' ? 'Consultation ended' : 'You left the room';
     $('#eLead').textContent = dur ? 'Call time ' + fmt(dur) + '.' : 'Nobody else joined.';
     acts.innerHTML = '<button class="btn-gold" id="eRe">Rejoin room</button>';
+  }
+  if (how === 'moved'){
+    $('#eTitle').textContent = 'Opened on another screen';
+    $('#eLead').textContent = 'This consultation is now continuing on your other screen or tab. You can close this one.';
+    acts.innerHTML = '<button class="btn-line" id="eRe">Use this screen instead</button>';
   }
   if ($('#eRe')) $('#eRe').onclick = () => location.reload();
 }
